@@ -47,9 +47,9 @@ export function PortfolioView({
     [holdingsQ.data],
   );
 
-  const quotesQ = useQuery({
+  const quotesQ = useQuery<Record<string, { price: number | null }>>({
     queryKey: ["quotes", userId, symbols.join(",")],
-    queryFn: async () => (symbols.length ? quotesFn({ data: { symbols } }) : {}),
+    queryFn: async () => (symbols.length ? await quotesFn({ data: { symbols } }) : {}),
     enabled: holdingsQ.isSuccess,
     refetchInterval: 30_000,
   });
