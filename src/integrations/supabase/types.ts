@@ -14,16 +14,138 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      holdings: {
+        Row: {
+          buy_date: string
+          buy_price: number
+          created_at: string
+          id: string
+          quantity: number
+          stock_name: string
+          stock_symbol: string
+          user_id: string
+        }
+        Insert: {
+          buy_date: string
+          buy_price: number
+          created_at?: string
+          id?: string
+          quantity: number
+          stock_name: string
+          stock_symbol: string
+          user_id: string
+        }
+        Update: {
+          buy_date?: string
+          buy_price?: number
+          created_at?: string
+          id?: string
+          quantity?: number
+          stock_name?: string
+          stock_symbol?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      manager_client_map: {
+        Row: {
+          client_id: string
+          created_at: string
+          id: string
+          manager_id: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          id?: string
+          manager_id: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          id?: string
+          manager_id?: string
+        }
+        Relationships: []
+      }
+      managers: {
+        Row: {
+          created_at: string
+          id: string
+          invite_code: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          invite_code: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invite_code?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          name: string
+          role: Database["public"]["Enums"]["app_role"]
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id: string
+          name: string
+          role: Database["public"]["Enums"]["app_role"]
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          name?: string
+          role?: Database["public"]["Enums"]["app_role"]
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "client" | "manager"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +272,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["client", "manager"],
+    },
   },
 } as const
