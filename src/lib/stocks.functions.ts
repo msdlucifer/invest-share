@@ -55,39 +55,35 @@ export const getQuotes = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<Record<string, Quote>> => {
     const unique = Array.from(new Set(data.symbols));
-    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(
-      unique.join(","),
-    )}`;
     const out: Record<string, Quote> = {};
-    try {
-      const res = await fetch(url, { headers: YAHOO_HEADERS });
-      if (!res.ok) {
-        for (const s of unique) out[s] = { symbol: s, price: null, currency: null, name: null };
-        return out;
-      }
-      const json = (await res.json()) as {
-        quoteResponse?: { result?: Array<Record<string, unknown>> };
-      };
-      const results = json.quoteResponse?.result ?? [];
-      for (const r of results) {
-        const sym = String(r.symbol);
-        out[sym] = {
-          symbol: sym,
-          price:
-            typeof r.regularMarketPrice === "number"
-              ? (r.regularMarketPrice as number)
-              : null,
-          currency: (r.currency as string) ?? null,
-          name: (r.longName as string) ?? (r.shortName as string) ?? null,
-        };
-      }
-      for (const s of unique) {
-        if (!out[s]) out[s] = { symbol: s, price: null, currency: null, name: null };
-      }
-      return out;
-    } catch (e) {
-      console.error("getQuotes failed", e);
-      for (const s of unique) out[s] = { symbol: s, price: null, currency: null, name: null };
-      return out;
-    }
+    await Promise.all(
+      unique.map(async (sym) => {
+        try {
+          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+          const res = await fetch(url, { headers: YAHOO_HEADERS });
+          if (!res.ok) {
+            out[sym] = { symbol: sym, price: null, currency: null, name: null };
+            return;
+          }
+          const json = (await res.json()) as {
+            chart?: { result?: Array<{ meta?: Record<string, unknown> }> };
+          };
+          const meta = json.chart?.result?.[0]?.meta;
+          if (!meta) {
+            out[sym] = { symbol: sym, price: null, currency: null, name: null };
+            return;
+          }
+          out[sym] = {
+            symbol: sym,
+            price: typeof meta.regularMarketPrice === "number" ? (meta.regularMarketPrice as number) : null,
+            currency: (meta.currency as string) ?? null,
+            name: (meta.longName as string) ?? (meta.shortName as string) ?? null,
+          };
+        } catch (e) {
+          console.error("getQuotes failed for", sym, e);
+          out[sym] = { symbol: sym, price: null, currency: null, name: null };
+        }
+      }),
+    );
+    return out;
   });
