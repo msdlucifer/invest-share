@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Search, Users, ChevronRight } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/clients")({
+export const Route = createFileRoute("/_authenticated/clients/")({
   head: () => ({ meta: [{ title: "Clients — Folio" }] }),
   component: ClientsPage,
 });
