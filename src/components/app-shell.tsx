@@ -1,15 +1,24 @@
-import { Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { LineChart, LogOut, Users, Briefcase, Link as LinkIcon } from "lucide-react";
+import { Link, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
+import { LogOut, Users, Briefcase, Link as LinkIcon, ArrowLeft } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/use-profile";
 import { useQueryClient } from "@tanstack/react-query";
+import { Logo } from "@/components/logo";
+import { motion } from "framer-motion";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { profile } = useProfile();
   const navigate = useNavigate();
   const router = useRouter();
   const qc = useQueryClient();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const canGoBack =
+    pathname !== "/" &&
+    pathname !== "/dashboard" &&
+    pathname !== "/portfolio" &&
+    pathname !== "/clients" &&
+    pathname !== "/clients/";
 
   const signOut = async () => {
     await qc.cancelQueries();
@@ -21,20 +30,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
-      <header className="border-b bg-card sticky top-0 z-30">
+      <header className="border-b bg-card/80 backdrop-blur sticky top-0 z-30">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-          <Link to="/" className="flex items-center gap-2 font-semibold">
-            <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <LineChart className="h-4 w-4" />
-            </span>
-            <span className="tracking-tight">Folio</span>
-          </Link>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => router.history.back()}
+              disabled={!canGoBack}
+              aria-label="Go back"
+              className="h-8 w-8 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <Link to="/" className="flex items-center">
+              <Logo />
+            </Link>
+          </div>
 
           <nav className="flex items-center gap-1 text-sm">
             {profile?.role === "client" && (
               <Link
                 to="/portfolio"
-                className="px-3 py-1.5 rounded-md hover:bg-accent text-muted-foreground data-[status=active]:text-foreground data-[status=active]:bg-accent"
+                className="px-3 py-1.5 rounded-md hover:bg-accent text-muted-foreground"
                 activeProps={{ className: "bg-accent text-foreground" }}
               >
                 <span className="inline-flex items-center gap-1.5"><Briefcase className="h-4 w-4" /> Portfolio</span>
@@ -73,7 +90,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="flex-1 mx-auto w-full max-w-7xl px-4 sm:px-6 py-6">{children}</main>
+      <motion.main
+        key={pathname}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+        className="flex-1 mx-auto w-full max-w-7xl px-4 sm:px-6 py-6"
+      >
+        {children}
+      </motion.main>
     </div>
   );
 }
