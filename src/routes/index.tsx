@@ -20,31 +20,25 @@ export const Route = createFileRoute("/")({
   component: Landing,
 });
 
-const fadeUp = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-};
-
 function Landing() {
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
-      {/* Ambient gradient orbs */}
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <motion.div
-          className="absolute top-[-10rem] left-[10%] h-[32rem] w-[32rem] rounded-full blur-3xl"
-          style={{ background: "radial-gradient(circle, oklch(0.7 0.18 250 / 0.30), transparent 70%)" }}
-          animate={{ x: [0, 40, 0], y: [0, 30, 0] }}
-          transition={{ duration: 16, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <motion.div
-          className="absolute top-[20%] right-[-8rem] h-[28rem] w-[28rem] rounded-full blur-3xl"
-          style={{ background: "radial-gradient(circle, oklch(0.7 0.16 300 / 0.22), transparent 70%)" }}
-          animate={{ x: [0, -40, 0], y: [0, 40, 0] }}
-          transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
-        />
-      </div>
+      {/* Static ambient gradient backdrop — no infinite animation */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse 60% 50% at 20% 0%, oklch(0.45 0.22 275 / 0.35), transparent 60%), radial-gradient(ellipse 50% 45% at 90% 20%, oklch(0.5 0.2 305 / 0.22), transparent 65%)",
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-px"
+        style={{ background: "linear-gradient(90deg, transparent, oklch(0.7 0.2 275 / 0.4), transparent)" }}
+      />
 
-      <header className="border-b border-border/50 backdrop-blur-sm bg-background/60 sticky top-0 z-30">
+      <header className="border-b border-border/50 backdrop-blur-md bg-background/60 sticky top-0 z-30">
         <div className="mx-auto max-w-6xl px-6 h-14 flex items-center justify-between">
           <Logo />
           <div className="flex items-center gap-2">
@@ -58,35 +52,31 @@ function Landing() {
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-6 py-24">
-        <motion.div {...fadeUp} transition={{ duration: 0.6 }} className="max-w-3xl">
-          <motion.span
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-1.5 rounded-full border bg-card/80 backdrop-blur px-3 py-1 text-xs text-muted-foreground"
-          >
+      <section className="mx-auto max-w-6xl px-6 py-24 sm:py-32">
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="max-w-3xl"
+        >
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-card/70 backdrop-blur px-3 py-1 text-xs text-muted-foreground">
             <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inset-0 rounded-full bg-success animate-ping opacity-75" />
+              <span className="absolute inset-0 rounded-full bg-success animate-ping opacity-70" />
               <span className="relative rounded-full h-1.5 w-1.5 bg-success" />
             </span>
-            Live NSE & BSE prices
-          </motion.span>
-          <motion.h1
-            {...fadeUp}
-            transition={{ duration: 0.7, delay: 0.1 }}
-            className="mt-6 text-5xl sm:text-6xl font-semibold tracking-tight leading-[1.05]"
-          >
+            Live NSE &amp; BSE prices
+          </span>
+          <h1 className="mt-6 font-serif text-5xl sm:text-6xl font-bold tracking-tight leading-[1.05]">
             Portfolio management,<br />
-            <span className="bg-gradient-to-r from-primary via-primary to-[oklch(0.55_0.18_300)] bg-clip-text text-transparent">
+            <span className="italic text-transparent bg-clip-text bg-gradient-to-r from-[oklch(0.78_0.18_270)] via-[oklch(0.7_0.2_285)] to-[oklch(0.65_0.2_310)]">
               built for clarity.
             </span>
-          </motion.h1>
-          <motion.p {...fadeUp} transition={{ duration: 0.7, delay: 0.2 }} className="mt-5 text-lg text-muted-foreground max-w-xl">
-            Clients track their own holdings with real-time profit & loss. Portfolio
+          </h1>
+          <p className="mt-6 text-lg text-muted-foreground max-w-xl leading-relaxed">
+            Clients track their own holdings with real-time profit &amp; loss. Portfolio
             managers monitor every assigned client from a single dashboard.
-          </motion.p>
-          <motion.div {...fadeUp} transition={{ duration: 0.7, delay: 0.3 }} className="mt-8 flex flex-wrap gap-3">
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3">
             <Button asChild size="lg" className="group">
               <Link to="/auth" search={{ mode: "signup", role: "client" }}>
                 I'm a Client
@@ -96,7 +86,7 @@ function Landing() {
             <Button asChild size="lg" variant="outline">
               <Link to="/auth" search={{ mode: "signup", role: "manager" }}>I'm a Portfolio Manager</Link>
             </Button>
-          </motion.div>
+          </div>
         </motion.div>
 
         <div className="mt-24 grid sm:grid-cols-3 gap-4">
@@ -107,18 +97,16 @@ function Landing() {
           ].map((f, i) => (
             <motion.div
               key={f.title}
-              initial={{ opacity: 0, y: 24 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-80px" }}
-              transition={{ duration: 0.5, delay: i * 0.08 }}
-              whileHover={{ y: -4 }}
-              className="rounded-xl border bg-card/80 backdrop-blur p-6 shadow-sm hover:shadow-md transition-shadow"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.15 + i * 0.06, ease: "easeOut" }}
+              className="group rounded-xl border border-border/60 bg-card/60 backdrop-blur p-6 shadow-sm transition-colors hover:border-primary/40"
             >
-              <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/15 text-primary ring-1 ring-primary/20">
                 <f.icon className="h-5 w-5" />
               </div>
-              <div className="mt-4 font-medium">{f.title}</div>
-              <div className="mt-1 text-sm text-muted-foreground leading-relaxed">{f.body}</div>
+              <div className="mt-4 font-serif text-lg font-bold">{f.title}</div>
+              <div className="mt-1.5 text-sm text-muted-foreground leading-relaxed">{f.body}</div>
             </motion.div>
           ))}
         </div>
