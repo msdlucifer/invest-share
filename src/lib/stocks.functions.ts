@@ -47,6 +47,60 @@ export interface Quote {
   price: number | null;
   currency: string | null;
   name: string | null;
+  error: string | null;
+}
+
+const QUOTE_MAX_ATTEMPTS = 3;
+const QUOTE_BASE_RETRY_DELAY_MS = 300;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchQuoteWithRetry(sym: string): Promise<Quote> {
+  let lastError = "Failed to fetch quote after multiple attempts";
+
+  for (let attempt = 1; attempt <= QUOTE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+      const res = await fetch(url, { headers: YAHOO_HEADERS });
+      if (!res.ok) throw new Error(`Yahoo Finance request failed (${res.status})`);
+
+      const json = (await res.json()) as {
+        chart?: { result?: Array<{ meta?: Record<string, unknown> }> };
+      };
+      const meta = json.chart?.result?.[0]?.meta;
+      if (!meta) throw new Error("Missing quote metadata");
+
+      const price =
+        typeof meta.regularMarketPrice === "number" ? (meta.regularMarketPrice as number) : null;
+      if (price == null) throw new Error("Missing regularMarketPrice");
+
+      return {
+        symbol: sym,
+        price,
+        currency: (meta.currency as string) ?? null,
+        name: (meta.longName as string) ?? (meta.shortName as string) ?? null,
+        error: null,
+      };
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : "Unexpected quote fetch error";
+      console.warn("fetchQuoteWithRetry attempt failed", {
+        symbol: sym,
+        attempt,
+        maxAttempts: QUOTE_MAX_ATTEMPTS,
+        error: lastError,
+      });
+      if (attempt < QUOTE_MAX_ATTEMPTS) {
+        await sleep(QUOTE_BASE_RETRY_DELAY_MS * 2 ** (attempt - 1));
+      }
+    }
+  }
+
+  console.error("fetchQuoteWithRetry failed after retries", {
+    symbol: sym,
+    error: lastError,
+    attempts: QUOTE_MAX_ATTEMPTS,
+  });
+  return { symbol: sym, price: null, currency: null, name: null, error: lastError };
 }
 
 export const getQuotes = createServerFn({ method: "POST" })
@@ -58,31 +112,7 @@ export const getQuotes = createServerFn({ method: "POST" })
     const out: Record<string, Quote> = {};
     await Promise.all(
       unique.map(async (sym) => {
-        try {
-          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
-          const res = await fetch(url, { headers: YAHOO_HEADERS });
-          if (!res.ok) {
-            out[sym] = { symbol: sym, price: null, currency: null, name: null };
-            return;
-          }
-          const json = (await res.json()) as {
-            chart?: { result?: Array<{ meta?: Record<string, unknown> }> };
-          };
-          const meta = json.chart?.result?.[0]?.meta;
-          if (!meta) {
-            out[sym] = { symbol: sym, price: null, currency: null, name: null };
-            return;
-          }
-          out[sym] = {
-            symbol: sym,
-            price: typeof meta.regularMarketPrice === "number" ? (meta.regularMarketPrice as number) : null,
-            currency: (meta.currency as string) ?? null,
-            name: (meta.longName as string) ?? (meta.shortName as string) ?? null,
-          };
-        } catch (e) {
-          console.error("getQuotes failed for", sym, e);
-          out[sym] = { symbol: sym, price: null, currency: null, name: null };
-        }
+        out[sym] = await fetchQuoteWithRetry(sym);
       }),
     );
     return out;
