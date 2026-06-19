@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
-import { getQuotes } from "@/lib/stocks.functions";
+import { getQuotes, type Quote } from "@/lib/stocks.functions";
 import { inr, num, pct, displaySymbol } from "@/lib/format";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ export function PortfolioView({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<HoldingRow | undefined>();
   const [query, setQuery] = useState("");
+  const [lastSuccessfulQuotesAt, setLastSuccessfulQuotesAt] = useState<number | null>(null);
 
   const holdingsQ = useQuery({
     queryKey: ["holdings", userId],
@@ -47,12 +48,31 @@ export function PortfolioView({
     [holdingsQ.data],
   );
 
-  const quotesQ = useQuery<Record<string, { price: number | null }>>({
+  const quotesQ = useQuery<Record<string, Quote>>({
     queryKey: ["quotes", userId, symbols.join(",")],
     queryFn: async () => (symbols.length ? await quotesFn({ data: { symbols } }) : {}),
     enabled: holdingsQ.isSuccess,
     refetchInterval: 30_000,
+    retry: 2,
+    retryDelay: (attempt) => Math.min(1_000 * 2 ** (attempt - 1), 8_000),
   });
+
+  useEffect(() => {
+    if (!quotesQ.data || quotesQ.dataUpdatedAt <= 0) return;
+    const hasLivePrice = Object.values(quotesQ.data).some((q) => q.price != null);
+    if (hasLivePrice) setLastSuccessfulQuotesAt(quotesQ.dataUpdatedAt);
+  }, [quotesQ.data, quotesQ.dataUpdatedAt]);
+
+  const quoteFailures = useMemo(
+    () =>
+      symbols.filter((sym) => {
+        const q = quotesQ.data?.[sym];
+        if (!q) return quotesQ.isSuccess;
+        return q.price == null && q.error != null;
+      }),
+    [symbols, quotesQ.data, quotesQ.isSuccess],
+  );
+  const hasQuoteFailures = quoteFailures.length > 0;
 
   const rows = useMemo(() => {
     const filter = query.trim().toLowerCase();
@@ -98,6 +118,13 @@ export function PortfolioView({
   };
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["quotes", userId, symbols.join(",")] });
+  const quoteStatus = quotesQ.isError
+    ? "Disconnected"
+    : hasQuoteFailures
+      ? "Degraded"
+      : symbols.length > 0
+        ? "Connected"
+        : "Idle";
 
   return (
     <div className="space-y-6">
@@ -142,9 +169,31 @@ export function PortfolioView({
           </div>
           <div className="text-xs text-muted-foreground ml-auto">
             {holdingsQ.data?.length ?? 0} holding{(holdingsQ.data?.length ?? 0) === 1 ? "" : "s"}
-            {quotesQ.dataUpdatedAt > 0 && <> · prices updated {new Date(quotesQ.dataUpdatedAt).toLocaleTimeString()}</>}
+            <> · status {quoteStatus}</>
+            {lastSuccessfulQuotesAt && (
+              <> · last successful update {new Date(lastSuccessfulQuotesAt).toLocaleTimeString()}</>
+            )}
           </div>
         </div>
+
+        {(quotesQ.isError || hasQuoteFailures) && (
+          <div className="mx-3 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            {quotesQ.isError ? (
+              <span>
+                Live prices are temporarily unavailable. Retrying automatically.{" "}
+                <button className="underline underline-offset-2" onClick={refresh} type="button">
+                  Retry now
+                </button>
+              </span>
+            ) : (
+              <span>
+                Couldn&apos;t refresh live prices for {quoteFailures.length} stock
+                {quoteFailures.length === 1 ? "" : "s"} ({quoteFailures.slice(0, 5).join(", ")}
+                {quoteFailures.length > 5 ? ", …" : ""}). Showing fallback values where unavailable.
+              </span>
+            )}
+          </div>
+        )}
 
         {holdingsQ.isLoading ? (
           <div className="p-10 text-center text-muted-foreground text-sm">Loading…</div>
@@ -182,7 +231,15 @@ export function PortfolioView({
                     </td>
                     <td className="px-3 py-3 text-right tabular-nums">{num(h.quantity, 4)}</td>
                     <td className="px-3 py-3 text-right tabular-nums">{inr(h.buy_price)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{live != null ? inr(live) : <span className="text-muted-foreground">—</span>}</td>
+                    <td className="px-3 py-3 text-right tabular-nums">
+                      {live != null ? (
+                        inr(live)
+                      ) : quotesQ.isFetching ? (
+                        <span className="text-muted-foreground">Updating…</span>
+                      ) : (
+                        <span className="text-amber-700 dark:text-amber-300">Unavailable</span>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-right tabular-nums">{inr(invested)}</td>
                     <td className="px-3 py-3 text-right tabular-nums">{inr(current)}</td>
                     <td className={cn("px-3 py-3 text-right tabular-nums font-medium", pnl == null ? "" : pnl >= 0 ? "text-profit" : "text-loss")}>
