@@ -57,22 +57,28 @@ export function PortfolioView({
     retryDelay: (attempt) => Math.min(1_000 * 2 ** (attempt - 1), 8_000),
   });
 
-  useEffect(() => {
-    if (!quotesQ.data || quotesQ.dataUpdatedAt <= 0) return;
-    const hasLivePrice = Object.values(quotesQ.data).some((q) => q.price != null);
-    if (hasLivePrice) setLastSuccessfulQuotesAt(quotesQ.dataUpdatedAt);
-  }, [quotesQ.data, quotesQ.dataUpdatedAt]);
+  const { hasLivePrice, quoteFailures } = useMemo(() => {
+    let hasLivePrice = false;
+    const quoteFailures: string[] = [];
 
-  const quoteFailures = useMemo(
-    () =>
-      symbols.filter((sym) => {
-        const q = quotesQ.data?.[sym];
-        if (!q) return quotesQ.isSuccess;
-        return q.price == null && q.error != null;
-      }),
-    [symbols, quotesQ.data, quotesQ.isSuccess],
-  );
+    for (const sym of symbols) {
+      const q = quotesQ.data?.[sym];
+      if (!q) {
+        if (quotesQ.isSuccess) quoteFailures.push(displaySymbol(sym));
+        continue;
+      }
+      if (q.price != null) hasLivePrice = true;
+      else if (q.error != null) quoteFailures.push(displaySymbol(sym));
+    }
+
+    return { hasLivePrice, quoteFailures };
+  }, [symbols, quotesQ.data, quotesQ.isSuccess]);
   const hasQuoteFailures = quoteFailures.length > 0;
+
+  useEffect(() => {
+    if (!quotesQ.data || quotesQ.dataUpdatedAt <= 0 || !hasLivePrice) return;
+    setLastSuccessfulQuotesAt(quotesQ.dataUpdatedAt);
+  }, [quotesQ.data, quotesQ.dataUpdatedAt, hasLivePrice]);
 
   const rows = useMemo(() => {
     const filter = query.trim().toLowerCase();
