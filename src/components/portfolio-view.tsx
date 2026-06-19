@@ -193,7 +193,7 @@ export function PortfolioView({
               </span>
             ) : (
               <span>
-                Couldn&apos;t refresh live prices for {quoteFailures.length} stock
+                Couldn't refresh live prices for {quoteFailures.length} stock
                 {quoteFailures.length === 1 ? "" : "s"} ({quoteFailures.slice(0, 5).join(", ")}
                 {quoteFailures.length > 5 ? ", …" : ""}). Showing fallback values where unavailable.
               </span>

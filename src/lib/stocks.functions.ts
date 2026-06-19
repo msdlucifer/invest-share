@@ -56,7 +56,7 @@ const QUOTE_BASE_RETRY_DELAY_MS = 300;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchQuoteWithRetry(sym: string): Promise<Quote> {
-  let lastError = "Quote unavailable";
+  let lastError = "Failed to fetch quote after multiple attempts";
 
   for (let attempt = 1; attempt <= QUOTE_MAX_ATTEMPTS; attempt++) {
     try {
@@ -83,7 +83,7 @@ async function fetchQuoteWithRetry(sym: string): Promise<Quote> {
       };
     } catch (e) {
       lastError = e instanceof Error ? e.message : "Unexpected quote fetch error";
-      console.warn("getQuotes attempt failed", {
+      console.warn("fetchQuoteWithRetry attempt failed", {
         symbol: sym,
         attempt,
         maxAttempts: QUOTE_MAX_ATTEMPTS,
@@ -95,7 +95,7 @@ async function fetchQuoteWithRetry(sym: string): Promise<Quote> {
     }
   }
 
-  console.error("getQuotes failed after retries", {
+  console.error("fetchQuoteWithRetry failed after retries", {
     symbol: sym,
     error: lastError,
     attempts: QUOTE_MAX_ATTEMPTS,
