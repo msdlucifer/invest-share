@@ -15,22 +15,12 @@ function InvitePage() {
 
   useEffect(() => {
     (async () => {
-      const upper = code.toUpperCase();
-      const { data: mgr } = await supabase
-        .from("managers")
-        .select("user_id")
-        .eq("invite_code", upper)
-        .maybeSingle();
-      if (!mgr) {
+      const { data, error } = await supabase.rpc("lookup_invite", { _code: code });
+      if (error || !data || data.length === 0) {
         setManagerName(null);
         return;
       }
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("name")
-        .eq("id", mgr.user_id)
-        .maybeSingle();
-      setManagerName(prof?.name ?? "your portfolio manager");
+      setManagerName(data[0].manager_name ?? "your portfolio manager");
     })();
   }, [code]);
 
