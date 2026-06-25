@@ -136,7 +136,12 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      lookup_invite: {
+        Args: { _code: string }
+        Returns: {
+          manager_name: string
+        }[]
+      }
     }
     Enums: {
       app_role: "client" | "manager"
