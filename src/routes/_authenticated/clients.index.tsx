@@ -12,7 +12,7 @@ export const Route = createFileRoute("/_authenticated/clients/")({
   component: ClientsPage,
 });
 
-type ClientRow = { id: string; name: string; email: string; holdings: number };
+type ClientRow = { id: string; name: string; email: string; assets: number };
 
 function ClientsPage() {
   const { profile } = useProfile();
@@ -32,17 +32,17 @@ function ClientsPage() {
         .from("profiles")
         .select("id,name,email")
         .in("id", ids);
-      const { data: holdings } = await supabase
-        .from("holdings")
+      const { data: assets } = await supabase
+        .from("assets")
         .select("user_id")
         .in("user_id", ids);
       const counts = new Map<string, number>();
-      for (const h of holdings ?? []) counts.set(h.user_id, (counts.get(h.user_id) ?? 0) + 1);
+      for (const h of assets ?? []) counts.set(h.user_id, (counts.get(h.user_id) ?? 0) + 1);
       return (profs ?? []).map((p) => ({
         id: p.id,
         name: p.name,
         email: p.email,
-        holdings: counts.get(p.id) ?? 0,
+        assets: counts.get(p.id) ?? 0,
       }));
     },
   });
@@ -97,7 +97,7 @@ function ClientsPage() {
                 </div>
               </div>
               <div className="flex items-center gap-4">
-                <span className="text-sm text-muted-foreground">{c.holdings} holding{c.holdings === 1 ? "" : "s"}</span>
+                <span className="text-sm text-muted-foreground">{c.assets} asset{c.assets === 1 ? "" : "s"}</span>
                 <ChevronRight className="h-4 w-4 text-muted-foreground" />
               </div>
             </Link>

@@ -14,35 +14,53 @@ export type Database = {
   }
   public: {
     Tables: {
-      holdings: {
+      assets: {
         Row: {
+          asset_name: string
+          asset_type: Database["public"]["Enums"]["asset_type"]
           buy_date: string
           buy_price: number
           created_at: string
+          current_price: number | null
           id: string
+          issuer: string | null
+          maturity_date: string | null
           quantity: number
-          stock_name: string
-          stock_symbol: string
+          symbol: string | null
+          unit: string | null
+          updated_at: string
           user_id: string
         }
         Insert: {
+          asset_name: string
+          asset_type: Database["public"]["Enums"]["asset_type"]
           buy_date: string
           buy_price: number
           created_at?: string
+          current_price?: number | null
           id?: string
+          issuer?: string | null
+          maturity_date?: string | null
           quantity: number
-          stock_name: string
-          stock_symbol: string
+          symbol?: string | null
+          unit?: string | null
+          updated_at?: string
           user_id: string
         }
         Update: {
+          asset_name?: string
+          asset_type?: Database["public"]["Enums"]["asset_type"]
           buy_date?: string
           buy_price?: number
           created_at?: string
+          current_price?: number | null
           id?: string
+          issuer?: string | null
+          maturity_date?: string | null
           quantity?: number
-          stock_name?: string
-          stock_symbol?: string
+          symbol?: string | null
+          unit?: string | null
+          updated_at?: string
           user_id?: string
         }
         Relationships: []
@@ -145,6 +163,7 @@ export type Database = {
     }
     Enums: {
       app_role: "client" | "manager"
+      asset_type: "equity" | "bond" | "commodity"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -273,6 +292,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["client", "manager"],
+      asset_type: ["equity", "bond", "commodity"],
     },
   },
 } as const
