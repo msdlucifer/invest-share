@@ -96,7 +96,7 @@ function PortfolioPage() {
           <PortfolioView
             userId={profile.id}
             title="My Portfolio"
-            subtitle="Live NSE & BSE prices, updated every 30s."
+            subtitle="Equity, bonds and commodities. Live prices updated every 30s."
           />
         </>
       )}
