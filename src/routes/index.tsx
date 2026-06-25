@@ -8,8 +8,8 @@ import { Logo } from "@/components/logo";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Folio — Live Stock Portfolio for Clients & Managers" },
-      { name: "description", content: "Track your holdings live, or manage portfolios across clients from one dashboard." },
+      { title: "Folio — Multi-Asset Portfolio Management for Clients & Managers" },
+      { name: "description", content: "Track equity, bonds and commodities with live prices. Managers oversee every assigned client portfolio from one dashboard." },
     ],
   }),
   beforeLoad: async () => {
@@ -64,7 +64,7 @@ function Landing() {
               <span className="absolute inset-0 rounded-full bg-success animate-ping opacity-70" />
               <span className="relative rounded-full h-1.5 w-1.5 bg-success" />
             </span>
-            Live NSE &amp; BSE prices
+            Equity · Bonds · Commodities
           </span>
           <h1 className="mt-6 font-serif text-5xl sm:text-6xl font-bold tracking-tight leading-[1.05]">
             Portfolio management,<br />
@@ -73,7 +73,7 @@ function Landing() {
             </span>
           </h1>
           <p className="mt-6 text-lg text-muted-foreground max-w-xl leading-relaxed">
-            Clients track their own holdings with real-time profit &amp; loss. Portfolio
+            Clients track equity, bonds and commodities with real-time profit &amp; loss. Portfolio
             managers monitor every assigned client from a single dashboard.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
@@ -91,9 +91,9 @@ function Landing() {
 
         <div className="mt-24 grid sm:grid-cols-3 gap-4">
           {[
-            { icon: TrendingUp, title: "Live P&L", body: "Real-time market values calculated on every visit. Buy price, current value, return %." },
-            { icon: Users, title: "Manager dashboards", body: "Onboard clients via invite link. View each portfolio with live data." },
-            { icon: ShieldCheck, title: "Role-based access", body: "Clients edit only their own holdings. Managers get view-only access." },
+            { icon: TrendingUp, title: "Multi-asset live P&L", body: "Equity and commodity prices update automatically. Bonds use manual pricing." },
+            { icon: Users, title: "Manager dashboards", body: "Onboard clients via invite link. Open any client to see their portfolio with live data." },
+            { icon: ShieldCheck, title: "Role-based access", body: "Clients manage their own assets. Managers get view-only access — no edits, no deletes." },
           ].map((f, i) => (
             <motion.div
               key={f.title}
