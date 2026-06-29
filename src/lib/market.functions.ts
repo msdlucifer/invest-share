@@ -19,7 +19,7 @@ export interface Quote {
   // Diagnostics surfaced to the UI when a quote can't be fetched
   error: string | null;
   status: number | null;
-  raw: unknown;
+  raw: string | null;
 }
 
 export interface QuoteRequest {
