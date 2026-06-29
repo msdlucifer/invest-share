@@ -83,15 +83,17 @@ async function fetchOne(req: QuoteRequest): Promise<Quote> {
   const url = `${TD_BASE}/quote?${params.toString()}`;
 
   let status: number | null = null;
-  let raw: unknown = null;
+  let raw: string | null = null;
+  let parsed: Record<string, unknown> | null = null;
   try {
     const res = await fetch(url);
     status = res.status;
     const text = await res.text();
+    raw = text.length > 2000 ? text.slice(0, 2000) + "…" : text;
     try {
-      raw = JSON.parse(text);
+      parsed = JSON.parse(text) as Record<string, unknown>;
     } catch {
-      raw = text;
+      parsed = null;
     }
     if (!res.ok) {
       return {
