@@ -3,17 +3,28 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { getQuotes, type Quote, type AssetType } from "@/lib/market.functions";
-import { inr, num, pct, displaySymbol, assetLabel, assetBadgeClass } from "@/lib/format";
+import { findCommodityPreset, FX_USD_INR_SYMBOL } from "@/lib/commodities";
+import { inr, num, pct, assetLabel, assetBadgeClass } from "@/lib/format";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { AssetDialog, type AssetRow } from "@/components/asset-dialog";
-import { Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { AlertCircle, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 type TabKey = "all" | AssetType;
+
+type QuoteKey = string; // `${symbol}|${exchange ?? ""}`
+const qkey = (s: string, e?: string | null): QuoteKey => `${s}|${e ?? ""}`;
 
 export function PortfolioView({
   userId,
@@ -32,14 +43,17 @@ export function PortfolioView({
   const [editing, setEditing] = useState<AssetRow | undefined>();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<TabKey>("all");
-  const [lastSuccessfulQuotesAt, setLastSuccessfulQuotesAt] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [errorDetail, setErrorDetail] = useState<Quote | null>(null);
 
   const assetsQ = useQuery({
     queryKey: ["assets", userId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("assets")
-        .select("id,asset_type,asset_name,symbol,buy_price,quantity,buy_date,current_price,unit,issuer,maturity_date")
+        .select(
+          "id,asset_type,asset_name,symbol,exchange,currency,buy_price,quantity,buy_date,current_price,unit,issuer,maturity_date",
+        )
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -47,72 +61,96 @@ export function PortfolioView({
     },
   });
 
-  // Symbols to quote: equity + commodity that have a symbol
-  const symbols = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (assetsQ.data ?? [])
-            .filter((a) => (a.asset_type === "equity" || a.asset_type === "commodity") && a.symbol)
-            .map((a) => a.symbol as string),
-        ),
-      ),
-    [assetsQ.data],
-  );
+  // Build quote requests: equities (symbol+exchange), commodities (apiSymbol),
+  // plus USD/INR if any commodity needs FX conversion.
+  const quoteRequests = useMemo(() => {
+    const reqs: { symbol: string; exchange: string | null }[] = [];
+    const seen = new Set<string>();
+    let needsFx = false;
+    for (const a of assetsQ.data ?? []) {
+      if (a.asset_type === "equity" && a.symbol) {
+        const k = qkey(a.symbol, a.exchange);
+        if (!seen.has(k)) {
+          seen.add(k);
+          reqs.push({ symbol: a.symbol, exchange: a.exchange ?? null });
+        }
+      } else if (a.asset_type === "commodity" && a.symbol) {
+        const k = qkey(a.symbol, null);
+        if (!seen.has(k)) {
+          seen.add(k);
+          reqs.push({ symbol: a.symbol, exchange: null });
+        }
+        const preset = findCommodityPreset(a.symbol);
+        if (preset && preset.apiCurrency !== preset.displayCurrency) needsFx = true;
+      }
+    }
+    if (needsFx) {
+      const k = qkey(FX_USD_INR_SYMBOL, null);
+      if (!seen.has(k)) reqs.push({ symbol: FX_USD_INR_SYMBOL, exchange: null });
+    }
+    return reqs;
+  }, [assetsQ.data]);
 
   const quotesQ = useQuery<Record<string, Quote>>({
-    queryKey: ["quotes", symbols.join(",")],
-    queryFn: async () => (symbols.length ? await quotesFn({ data: { symbols } }) : {}),
-    enabled: assetsQ.isSuccess,
+    queryKey: ["quotes", quoteRequests.map((r) => qkey(r.symbol, r.exchange)).join(",")],
+    queryFn: async () =>
+      quoteRequests.length ? await quotesFn({ data: { requests: quoteRequests } }) : {},
+    enabled: assetsQ.isSuccess && quoteRequests.length > 0,
     refetchInterval: 30_000,
-    retry: 2,
-    retryDelay: (attempt) => Math.min(1_000 * 2 ** (attempt - 1), 8_000),
+    retry: 1,
   });
 
-  const { hasLivePrice, quoteFailures } = useMemo(() => {
-    let live = false;
-    const fails: string[] = [];
-    for (const sym of symbols) {
-      const q = quotesQ.data?.[sym];
-      if (!q) {
-        if (quotesQ.isSuccess) fails.push(displaySymbol(sym));
-        continue;
-      }
-      if (q.price != null) live = true;
-      else if (q.error != null) fails.push(displaySymbol(sym));
-    }
-    return { hasLivePrice: live, quoteFailures: fails };
-  }, [symbols, quotesQ.data, quotesQ.isSuccess]);
-  const hasQuoteFailures = quoteFailures.length > 0;
-
   useEffect(() => {
-    if (!quotesQ.data || quotesQ.dataUpdatedAt <= 0 || !hasLivePrice) return;
-    setLastSuccessfulQuotesAt(quotesQ.dataUpdatedAt);
-  }, [quotesQ.data, quotesQ.dataUpdatedAt, hasLivePrice]);
+    if (quotesQ.data && quotesQ.dataUpdatedAt > 0) setLastUpdated(quotesQ.dataUpdatedAt);
+  }, [quotesQ.data, quotesQ.dataUpdatedAt]);
 
-  // Resolve live price for an asset (or fallback to manual current_price)
-  const livePriceFor = (a: AssetRow): number | null => {
-    if (a.asset_type === "bond") return a.current_price ?? null;
-    if (a.symbol) {
-      const live = quotesQ.data?.[a.symbol]?.price;
-      if (live != null) return live;
-    }
-    return a.current_price ?? null;
+  const usdInr = quotesQ.data?.[qkey(FX_USD_INR_SYMBOL, null)]?.price ?? null;
+
+  type Enriched = {
+    a: AssetRow;
+    cmp: number | null; // in display currency, per display unit
+    cmpUnit: string | null;
+    invested: number;
+    current: number | null;
+    pnl: number | null;
+    ret: number | null;
+    quote: Quote | null;
   };
 
-  const enriched = useMemo(
-    () =>
-      (assetsQ.data ?? []).map((a) => {
-        const live = livePriceFor(a);
-        const invested = a.buy_price * a.quantity;
-        const current = live != null ? live * a.quantity : null;
-        const pnl = current != null ? current - invested : null;
-        const ret = current != null && invested > 0 ? (pnl! / invested) * 100 : null;
-        return { a, live, invested, current, pnl, ret };
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [assetsQ.data, quotesQ.data],
-  );
+  const enriched: Enriched[] = useMemo(() => {
+    return (assetsQ.data ?? []).map((a) => {
+      let cmp: number | null = null;
+      let cmpUnit: string | null = null;
+      let quote: Quote | null = null;
+
+      if (a.asset_type === "bond") {
+        cmp = a.current_price ?? null;
+      } else if (a.asset_type === "equity" && a.symbol) {
+        quote = quotesQ.data?.[qkey(a.symbol, a.exchange)] ?? null;
+        cmp = quote?.price ?? a.current_price ?? null;
+      } else if (a.asset_type === "commodity" && a.symbol) {
+        quote = quotesQ.data?.[qkey(a.symbol, null)] ?? null;
+        const preset = findCommodityPreset(a.symbol);
+        cmpUnit = a.unit ?? preset?.displayUnit ?? null;
+        if (quote?.price != null && preset) {
+          let price = quote.price * preset.unitFactor;
+          if (preset.apiCurrency !== preset.displayCurrency) {
+            if (usdInr != null) price = price * usdInr;
+            else price = NaN; // FX missing
+          }
+          cmp = Number.isFinite(price) ? price : null;
+        } else {
+          cmp = a.current_price ?? null;
+        }
+      }
+
+      const invested = a.buy_price * a.quantity;
+      const current = cmp != null ? cmp * a.quantity : null;
+      const pnl = current != null ? current - invested : null;
+      const ret = current != null && invested > 0 ? (pnl! / invested) * 100 : null;
+      return { a, cmp, cmpUnit, invested, current, pnl, ret, quote };
+    });
+  }, [assetsQ.data, quotesQ.data, usdInr]);
 
   const rows = useMemo(() => {
     const filter = query.trim().toLowerCase();
@@ -129,10 +167,10 @@ export function PortfolioView({
 
   // Allocation totals across ALL assets (not filtered)
   const allocation = useMemo(() => {
-    const byType: Record<AssetType, { invested: number; current: number; hasAll: boolean }> = {
-      equity: { invested: 0, current: 0, hasAll: true },
-      bond: { invested: 0, current: 0, hasAll: true },
-      commodity: { invested: 0, current: 0, hasAll: true },
+    const byType: Record<AssetType, { invested: number; current: number; hasAll: boolean; any: boolean }> = {
+      equity: { invested: 0, current: 0, hasAll: true, any: false },
+      bond: { invested: 0, current: 0, hasAll: true, any: false },
+      commodity: { invested: 0, current: 0, hasAll: true, any: false },
     };
     let totalInvested = 0;
     let totalCurrent = 0;
@@ -140,6 +178,7 @@ export function PortfolioView({
 
     for (const r of enriched) {
       const t = r.a.asset_type;
+      byType[t].any = true;
       byType[t].invested += r.invested;
       totalInvested += r.invested;
       if (r.current != null) {
@@ -159,11 +198,11 @@ export function PortfolioView({
       totalCurrent: totalHasAll ? totalCurrent : null,
       totalPnl,
       totalRet,
-      equity: { ...byType.equity, pct: byType.equity.hasAll ? pctOf(byType.equity.current) : null },
-      bond: { ...byType.bond, pct: byType.bond.hasAll ? pctOf(byType.bond.current) : null },
+      equity: { ...byType.equity, pct: byType.equity.hasAll && byType.equity.any ? pctOf(byType.equity.current) : null },
+      bond: { ...byType.bond, pct: byType.bond.hasAll && byType.bond.any ? pctOf(byType.bond.current) : null },
       commodity: {
         ...byType.commodity,
-        pct: byType.commodity.hasAll ? pctOf(byType.commodity.current) : null,
+        pct: byType.commodity.hasAll && byType.commodity.any ? pctOf(byType.commodity.current) : null,
       },
     };
   }, [enriched]);
@@ -178,14 +217,7 @@ export function PortfolioView({
     }
   };
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ["quotes", symbols.join(",")] });
-  const quoteStatus = quotesQ.isError
-    ? "Disconnected"
-    : hasQuoteFailures
-      ? "Degraded"
-      : symbols.length > 0
-        ? "Connected"
-        : "Idle";
+  const refresh = () => qc.invalidateQueries({ queryKey: ["quotes"] });
 
   const counts = useMemo(() => {
     const c: Record<TabKey, number> = { all: 0, equity: 0, bond: 0, commodity: 0 };
@@ -195,6 +227,15 @@ export function PortfolioView({
     }
     return c;
   }, [assetsQ.data]);
+
+  const failedQuotes = useMemo(
+    () => enriched.filter((r) => r.quote && r.quote.error != null).map((r) => r.quote!),
+    [enriched],
+  );
+
+  // Totals: monetary tone for current value & P&L
+  const totalTone = totalCurrentTone(allocation.totalCurrent, allocation.totalInvested);
+  const pnlTone = totalCurrentTone(allocation.totalCurrent, allocation.totalInvested);
 
   return (
     <div className="space-y-6">
@@ -206,7 +247,7 @@ export function PortfolioView({
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={refresh} disabled={quotesQ.isFetching}>
             <RefreshCw className={cn("h-4 w-4 mr-2", quotesQ.isFetching && "animate-spin")} />
-            Refresh prices
+            Refresh C.M.P
           </Button>
           {!readOnly && (
             <Button size="sm" onClick={() => { setEditing(undefined); setDialogOpen(true); }}>
@@ -220,26 +261,40 @@ export function PortfolioView({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
           label="Total Portfolio Value"
-          value={inr(allocation.totalCurrent)}
-          tone={allocation.totalPnl == null ? "default" : allocation.totalPnl >= 0 ? "profit" : "loss"}
+          value={
+            <CurrencyWithDelta
+              value={allocation.totalCurrent}
+              invested={allocation.totalInvested}
+              showPct
+            />
+          }
+          tone={totalTone}
         />
         <AllocationCard label="Equity" value={allocation.equity.current} pct={allocation.equity.pct} hasAny={counts.equity > 0} />
         <AllocationCard label="Bonds" value={allocation.bond.current} pct={allocation.bond.pct} hasAny={counts.bond > 0} />
         <AllocationCard label="Commodities" value={allocation.commodity.current} pct={allocation.commodity.pct} hasAny={counts.commodity > 0} />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <StatCard label="Invested" value={inr(allocation.totalInvested)} />
-        <StatCard label="Current Value" value={inr(allocation.totalCurrent)} />
         <StatCard
-          label="Profit / Loss"
-          value={inr(allocation.totalPnl)}
-          tone={allocation.totalPnl == null ? "default" : allocation.totalPnl >= 0 ? "profit" : "loss"}
+          label="Current Value"
+          value={<CurrencyWithDelta value={allocation.totalCurrent} invested={allocation.totalInvested} showPct />}
+          tone={totalTone}
         />
         <StatCard
-          label="Return"
-          value={pct(allocation.totalRet)}
-          tone={allocation.totalRet == null ? "default" : allocation.totalRet >= 0 ? "profit" : "loss"}
+          label="Profit / Loss"
+          value={
+            <span>
+              {pnlPrimary(allocation.totalPnl)}
+              {allocation.totalRet != null && (
+                <span className="ml-1.5 text-sm font-normal opacity-80">
+                  ({pct(allocation.totalRet)})
+                </span>
+              )}
+            </span>
+          }
+          tone={pnlTone}
         />
       </div>
 
@@ -258,29 +313,21 @@ export function PortfolioView({
             <Input className="pl-8 h-9" placeholder="Search assets…" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
           <div className="text-xs text-muted-foreground ml-auto">
-            status {quoteStatus}
-            {lastSuccessfulQuotesAt && (
-              <> · last update {new Date(lastSuccessfulQuotesAt).toLocaleTimeString()}</>
-            )}
+            {quotesQ.isFetching ? "Refreshing…" : "C.M.P"}
+            {lastUpdated && <> · updated {new Date(lastUpdated).toLocaleTimeString()}</>}
           </div>
         </div>
 
-        {(quotesQ.isError || hasQuoteFailures) && (
+        {failedQuotes.length > 0 && (
           <div className="mx-3 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            {quotesQ.isError ? (
-              <span>
-                Live prices are temporarily unavailable. Retrying automatically.{" "}
-                <button className="underline underline-offset-2" onClick={refresh} type="button">
-                  Retry now
-                </button>
-              </span>
-            ) : (
-              <span>
-                Couldn't refresh live prices for {quoteFailures.length} symbol
-                {quoteFailures.length === 1 ? "" : "s"} ({quoteFailures.slice(0, 5).join(", ")}
-                {quoteFailures.length > 5 ? ", …" : ""}). Showing manual / fallback values where set.
-              </span>
-            )}
+            Couldn't fetch C.M.P for {failedQuotes.length} symbol{failedQuotes.length === 1 ? "" : "s"}.{" "}
+            <button
+              type="button"
+              className="underline underline-offset-2"
+              onClick={() => setErrorDetail(failedQuotes[0])}
+            >
+              View error details
+            </button>
           </div>
         )}
 
@@ -306,65 +353,95 @@ export function PortfolioView({
                   <th className="text-left font-medium px-3 py-2.5">Type</th>
                   <th className="text-right font-medium px-3 py-2.5">Qty</th>
                   <th className="text-right font-medium px-3 py-2.5">Buy</th>
-                  <th className="text-right font-medium px-3 py-2.5">Current</th>
+                  <th className="text-right font-medium px-3 py-2.5">C.M.P</th>
                   <th className="text-right font-medium px-3 py-2.5">Invested</th>
-                  <th className="text-right font-medium px-3 py-2.5">Value</th>
-                  <th className="text-right font-medium px-3 py-2.5">P&L</th>
-                  <th className="text-right font-medium px-3 py-2.5">Return</th>
+                  <th className="text-right font-medium px-3 py-2.5">Current Value</th>
+                  <th className="text-right font-medium px-3 py-2.5">P&amp;L</th>
                   {!readOnly && <th className="px-3 py-2.5"></th>}
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({ a, live, invested, current, pnl, ret }) => (
-                  <tr key={a.id} className="border-t hover:bg-muted/30">
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{a.asset_name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {a.symbol ? `${displaySymbol(a.symbol)} · ` : ""}
-                        {a.asset_type === "bond" && a.maturity_date
-                          ? `matures ${a.maturity_date}`
-                          : a.buy_date}
-                        {a.unit ? ` · per ${a.unit}` : ""}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={cn("text-xs px-2 py-0.5 rounded font-medium", assetBadgeClass(a.asset_type))}>
-                        {assetLabel(a.asset_type)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-right tabular-nums">{num(a.quantity, 4)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{inr(a.buy_price)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">
-                      {live != null ? (
-                        inr(live)
-                      ) : quotesQ.isFetching && a.asset_type !== "bond" ? (
-                        <span className="text-muted-foreground">Updating…</span>
-                      ) : (
-                        <span className="text-amber-700 dark:text-amber-300">Unavailable</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-right tabular-nums">{inr(invested)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{inr(current)}</td>
-                    <td className={cn("px-3 py-3 text-right tabular-nums font-medium", pnl == null ? "" : pnl >= 0 ? "text-profit" : "text-loss")}>
-                      {inr(pnl)}
-                    </td>
-                    <td className={cn("px-3 py-3 text-right tabular-nums font-medium", ret == null ? "" : ret >= 0 ? "text-profit" : "text-loss")}>
-                      {pct(ret)}
-                    </td>
-                    {!readOnly && (
-                      <td className="px-3 py-3 text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditing(a); setDialogOpen(true); }}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => onDelete(a.id)}>
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                {rows.map(({ a, cmp, cmpUnit, invested, current, pnl, ret, quote }) => {
+                  const cvTone = totalCurrentTone(current, invested);
+                  return (
+                    <tr key={a.id} className="border-t hover:bg-muted/30">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{a.asset_name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {a.symbol ? `${a.symbol}${a.exchange ? ` · ${a.exchange}` : ""} · ` : ""}
+                          {a.asset_type === "bond" && a.maturity_date
+                            ? `matures ${a.maturity_date}`
+                            : a.buy_date}
                         </div>
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="px-3 py-3">
+                        <span className={cn("text-xs px-2 py-0.5 rounded font-medium", assetBadgeClass(a.asset_type))}>
+                          {assetLabel(a.asset_type)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">{num(a.quantity, 4)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">{inr(a.buy_price)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {cmp != null ? (
+                          <span>
+                            {inr(cmp)}
+                            {cmpUnit && <span className="text-xs text-muted-foreground"> / {cmpUnit}</span>}
+                          </span>
+                        ) : a.asset_type !== "bond" && quotesQ.isFetching ? (
+                          <span className="text-muted-foreground">Updating…</span>
+                        ) : quote?.error ? (
+                          <button
+                            type="button"
+                            className="text-amber-700 dark:text-amber-300 underline underline-offset-2"
+                            onClick={() => setErrorDetail(quote)}
+                          >
+                            <AlertCircle className="h-3.5 w-3.5 inline mr-1" />
+                            Error
+                          </button>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">{inr(invested)}</td>
+                      <td className={cn("px-3 py-3 text-right tabular-nums font-medium", toneClass(cvTone))}>
+                        {current != null ? (
+                          <span>
+                            {inr(current)}
+                            {ret != null && (
+                              <span className="ml-1 text-xs opacity-90">({pct(ret)})</span>
+                            )}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={cn("px-3 py-3 text-right tabular-nums font-medium", toneClass(cvTone))}>
+                        {pnl != null ? (
+                          <span>
+                            {pnlPrimary(pnl)}
+                            {ret != null && (
+                              <span className="ml-1 text-xs opacity-90">({pct(ret)})</span>
+                            )}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      {!readOnly && (
+                        <td className="px-3 py-3 text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditing(a); setDialogOpen(true); }}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => onDelete(a.id)}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -381,7 +458,81 @@ export function PortfolioView({
           onSaved={() => qc.invalidateQueries({ queryKey: ["assets", userId] })}
         />
       )}
+
+      <Dialog open={errorDetail != null} onOpenChange={(v) => !v && setErrorDetail(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>C.M.P fetch failed</DialogTitle>
+            <DialogDescription>
+              Diagnostic details from the market data provider.
+            </DialogDescription>
+          </DialogHeader>
+          {errorDetail && (
+            <div className="space-y-2 text-sm">
+              <Row k="Requested symbol" v={errorDetail.symbol} />
+              {errorDetail.exchange && <Row k="Exchange" v={errorDetail.exchange} />}
+              <Row k="HTTP status" v={errorDetail.status != null ? String(errorDetail.status) : "—"} />
+              <Row k="API error" v={errorDetail.error ?? "—"} />
+              <div>
+                <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                  Raw response
+                </div>
+                <pre className="text-xs bg-muted rounded p-2 overflow-auto max-h-60">
+                  {errorDetail.raw ?? "(empty)"}
+                </pre>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex gap-2">
+      <span className="text-muted-foreground w-32 shrink-0">{k}</span>
+      <span className="font-medium break-all">{v}</span>
+    </div>
+  );
+}
+
+type Tone = "default" | "profit" | "loss";
+function totalCurrentTone(current: number | null, invested: number): Tone {
+  if (current == null) return "default";
+  if (current > invested) return "profit";
+  if (current < invested) return "loss";
+  return "default";
+}
+function toneClass(t: Tone) {
+  return t === "profit" ? "text-profit" : t === "loss" ? "text-loss" : "";
+}
+function pnlPrimary(n: number | null) {
+  if (n == null) return "—";
+  const sign = n > 0 ? "+" : n < 0 ? "−" : "";
+  return `${sign}${inr(Math.abs(n))}`;
+}
+
+function CurrencyWithDelta({
+  value,
+  invested,
+  showPct,
+}: {
+  value: number | null;
+  invested: number;
+  showPct?: boolean;
+}) {
+  if (value == null) return <span>—</span>;
+  const diff = value - invested;
+  const ret = invested > 0 ? (diff / invested) * 100 : null;
+  return (
+    <span>
+      {inr(value)}
+      {showPct && ret != null && (
+        <span className="ml-1.5 text-sm font-normal opacity-80">({pct(ret)})</span>
+      )}
+    </span>
   );
 }
 
