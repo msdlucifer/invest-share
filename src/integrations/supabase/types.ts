@@ -21,7 +21,9 @@ export type Database = {
           buy_date: string
           buy_price: number
           created_at: string
+          currency: string | null
           current_price: number | null
+          exchange: string | null
           id: string
           issuer: string | null
           maturity_date: string | null
@@ -37,7 +39,9 @@ export type Database = {
           buy_date: string
           buy_price: number
           created_at?: string
+          currency?: string | null
           current_price?: number | null
+          exchange?: string | null
           id?: string
           issuer?: string | null
           maturity_date?: string | null
@@ -53,7 +57,9 @@ export type Database = {
           buy_date?: string
           buy_price?: number
           created_at?: string
+          currency?: string | null
           current_price?: number | null
+          exchange?: string | null
           id?: string
           issuer?: string | null
           maturity_date?: string | null
