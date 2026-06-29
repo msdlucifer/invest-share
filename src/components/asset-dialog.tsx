@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { searchSymbols, type SymbolSearchResult, type AssetType } from "@/lib/market.functions";
+import { COMMODITY_PRESETS, findCommodityPreset } from "@/lib/commodities";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Search } from "lucide-react";
@@ -30,6 +31,8 @@ export type AssetRow = {
   asset_type: AssetType;
   asset_name: string;
   symbol: string | null;
+  exchange: string | null;
+  currency: string | null;
   buy_price: number;
   quantity: number;
   buy_date: string;
@@ -38,15 +41,6 @@ export type AssetRow = {
   issuer: string | null;
   maturity_date: string | null;
 };
-
-const COMMODITY_PRESETS: { name: string; symbol: string; unit: string }[] = [
-  { name: "Gold", symbol: "XAU/USD", unit: "gram" },
-  { name: "Silver", symbol: "XAG/USD", unit: "gram" },
-  { name: "Crude Oil (WTI)", symbol: "WTI/USD", unit: "barrel" },
-  { name: "Brent Crude", symbol: "BRENT/USD", unit: "barrel" },
-  { name: "Natural Gas", symbol: "NG/USD", unit: "MMBtu" },
-  { name: "Copper", symbol: "COPPER/USD", unit: "lb" },
-];
 
 export function AssetDialog({
   open,
@@ -66,6 +60,8 @@ export function AssetDialog({
   const [assetType, setAssetType] = useState<AssetType>(existing?.asset_type ?? defaultType);
   const [assetName, setAssetName] = useState(existing?.asset_name ?? "");
   const [symbol, setSymbol] = useState(existing?.symbol ?? "");
+  const [exchange, setExchange] = useState(existing?.exchange ?? "");
+  const [currency, setCurrency] = useState(existing?.currency ?? "");
   const [buyPrice, setBuyPrice] = useState<string>(existing ? String(existing.buy_price) : "");
   const [qty, setQty] = useState<string>(existing ? String(existing.quantity) : "");
   const [date, setDate] = useState(existing?.buy_date ?? new Date().toISOString().slice(0, 10));
@@ -85,16 +81,14 @@ export function AssetDialog({
   const searchFn = useServerFn(searchSymbols);
 
   useEffect(() => {
-    if (!query.trim() || assetType === "bond") {
+    if (!query.trim() || assetType !== "equity") {
       setResults([]);
       return;
     }
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await searchFn({
-          data: { q: query.trim(), assetType: assetType === "commodity" ? "commodity" : "equity" },
-        });
+        const r = await searchFn({ data: { q: query.trim(), assetType: "equity" } });
         setResults(r);
       } finally {
         setSearching(false);
@@ -108,6 +102,8 @@ export function AssetDialog({
       setAssetType(existing?.asset_type ?? defaultType);
       setAssetName(existing?.asset_name ?? "");
       setSymbol(existing?.symbol ?? "");
+      setExchange(existing?.exchange ?? "");
+      setCurrency(existing?.currency ?? "");
       setBuyPrice(existing ? String(existing.buy_price) : "");
       setQty(existing ? String(existing.quantity) : "");
       setDate(existing?.buy_date ?? new Date().toISOString().slice(0, 10));
@@ -139,9 +135,15 @@ export function AssetDialog({
       toast.error("Maturity date is required");
       return;
     }
-    if (assetType === "commodity" && !unit.trim()) {
-      toast.error("Unit is required");
-      return;
+    if (assetType === "commodity") {
+      if (!symbol.trim()) {
+        toast.error("Pick a commodity");
+        return;
+      }
+      if (!unit.trim()) {
+        toast.error("Unit is required");
+        return;
+      }
     }
 
     const payload = {
@@ -149,6 +151,8 @@ export function AssetDialog({
       asset_type: assetType,
       asset_name: assetName.trim(),
       symbol: symbol.trim() || null,
+      exchange: exchange.trim() || null,
+      currency: currency.trim() || (assetType === "commodity" ? "INR" : null),
       buy_price: bp,
       quantity: q,
       buy_date: date,
@@ -203,21 +207,26 @@ export function AssetDialog({
 
           {assetType === "equity" && (
             <div className="space-y-1.5">
-              <Label>Stock</Label>
+              <Label>Company</Label>
               <Popover open={searchOpen} onOpenChange={setSearchOpen}>
                 <PopoverTrigger asChild>
-                  <Button type="button" variant="outline" className="w-full justify-start font-normal">
-                    <Search className="h-4 w-4 mr-2 text-muted-foreground" />
+                  <Button type="button" variant="outline" className="w-full justify-start font-normal h-auto py-2">
+                    <Search className="h-4 w-4 mr-2 text-muted-foreground shrink-0" />
                     {symbol ? (
-                      <span><span className="font-medium">{assetName}</span> <span className="text-muted-foreground">· {symbol}</span></span>
+                      <span className="text-left">
+                        <span className="font-medium block">{assetName}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {symbol}{exchange ? ` · ${exchange}` : ""}{currency ? ` · ${currency}` : ""}
+                        </span>
+                      </span>
                     ) : (
-                      <span className="text-muted-foreground">Search e.g. Reliance, AAPL…</span>
+                      <span className="text-muted-foreground">Search company e.g. Reliance, TCS, Infosys…</span>
                     )}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="p-0 w-[--radix-popover-trigger-width]" align="start">
                   <Command shouldFilter={false}>
-                    <CommandInput placeholder="Search stocks…" value={query} onValueChange={setQuery} />
+                    <CommandInput placeholder="Search company name…" value={query} onValueChange={setQuery} />
                     <CommandList>
                       {searching && <div className="p-3 text-sm text-muted-foreground">Searching…</div>}
                       {!searching && query && results.length === 0 && <CommandEmpty>No matches.</CommandEmpty>}
@@ -225,16 +234,20 @@ export function AssetDialog({
                         {results.map((r) => (
                           <CommandItem
                             key={`${r.symbol}-${r.exchange}`}
-                            value={r.symbol}
+                            value={`${r.symbol}-${r.exchange}`}
                             onSelect={() => {
                               setSymbol(r.symbol);
                               setAssetName(r.name);
+                              setExchange(r.exchange);
+                              setCurrency(r.currency);
                               setSearchOpen(false);
                             }}
                           >
                             <div className="flex flex-col">
                               <span className="text-sm font-medium">{r.name}</span>
-                              <span className="text-xs text-muted-foreground">{r.symbol} · {r.exchange}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {r.symbol} · {r.exchange}{r.currency ? ` · ${r.currency}` : ""}
+                              </span>
                             </div>
                           </CommandItem>
                         ))}
@@ -243,6 +256,9 @@ export function AssetDialog({
                   </Command>
                 </PopoverContent>
               </Popover>
+              <p className="text-xs text-muted-foreground">
+                Picks the official symbol &amp; exchange from Twelve Data automatically.
+              </p>
             </div>
           )}
 
@@ -251,32 +267,29 @@ export function AssetDialog({
               <div className="space-y-1.5">
                 <Label>Commodity</Label>
                 <Select
-                  value={symbol || "_custom"}
+                  value={symbol}
                   onValueChange={(v) => {
-                    if (v === "_custom") {
-                      setSymbol("");
-                      return;
-                    }
-                    const p = COMMODITY_PRESETS.find((c) => c.symbol === v);
+                    const p = findCommodityPreset(v);
                     if (p) {
-                      setSymbol(p.symbol);
+                      setSymbol(p.apiSymbol);
                       setAssetName(p.name);
-                      if (!unit) setUnit(p.unit);
+                      setUnit(p.displayUnit);
+                      setCurrency(p.displayCurrency);
                     }
                   }}
                 >
                   <SelectTrigger><SelectValue placeholder="Pick a commodity" /></SelectTrigger>
                   <SelectContent>
                     {COMMODITY_PRESETS.map((c) => (
-                      <SelectItem key={c.symbol} value={c.symbol}>{c.name} ({c.symbol})</SelectItem>
+                      <SelectItem key={c.apiSymbol} value={c.apiSymbol}>
+                        {c.name} — {c.displayCurrency} / {c.displayUnit}
+                      </SelectItem>
                     ))}
-                    <SelectItem value="_custom">Custom…</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="cname">Display name</Label>
-                <Input id="cname" required value={assetName} onChange={(e) => setAssetName(e.target.value)} placeholder="Gold" />
+                <p className="text-xs text-muted-foreground">
+                  Prices auto-convert into ₹ per {unit || "unit"}.
+                </p>
               </div>
             </>
           )}
@@ -296,21 +309,20 @@ export function AssetDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="bp">{assetType === "bond" ? "Purchase price (₹)" : "Buy price (₹)"}</Label>
+              <Label htmlFor="bp">
+                {assetType === "commodity"
+                  ? `Buy price (₹ / ${unit || "unit"})`
+                  : assetType === "bond"
+                    ? "Purchase price (₹)"
+                    : "Buy price (₹)"}
+              </Label>
               <Input id="bp" type="number" step="0.01" min="0" required value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="qty">Quantity</Label>
+              <Label htmlFor="qty">Quantity {assetType === "commodity" && unit ? `(${unit})` : ""}</Label>
               <Input id="qty" type="number" step="0.0001" min="0" required value={qty} onChange={(e) => setQty(e.target.value)} />
             </div>
           </div>
-
-          {assetType === "commodity" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="unit">Unit</Label>
-              <Input id="unit" required value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="gram, barrel, oz…" />
-            </div>
-          )}
 
           {assetType === "bond" ? (
             <div className="space-y-1.5">
@@ -324,20 +336,17 @@ export function AssetDialog({
             </div>
           )}
 
-          {assetType !== "equity" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="cp">
-                Current price (₹) {assetType === "bond" ? "" : "— optional, used if live price unavailable"}
-              </Label>
-              <Input id="cp" type="number" step="0.01" min="0" value={currentPrice} onChange={(e) => setCurrentPrice(e.target.value)} />
-            </div>
-          )}
-
           {assetType === "bond" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="bdate">Purchase date</Label>
-              <Input id="bdate" type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-            </div>
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="cp">Current price (₹)</Label>
+                <Input id="cp" type="number" step="0.01" min="0" value={currentPrice} onChange={(e) => setCurrentPrice(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="bdate">Purchase date</Label>
+                <Input id="bdate" type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
+            </>
           )}
 
           <DialogFooter>
