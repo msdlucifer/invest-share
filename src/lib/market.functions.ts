@@ -8,14 +8,23 @@ export interface SymbolSearchResult {
   name: string;
   exchange: string;
   type: string;
-  currency?: string;
+  currency: string;
 }
 
 export interface Quote {
   symbol: string;
+  exchange: string | null;
   price: number | null;
   currency: string | null;
+  // Diagnostics surfaced to the UI when a quote can't be fetched
   error: string | null;
+  status: number | null;
+  raw: unknown;
+}
+
+export interface QuoteRequest {
+  symbol: string;
+  exchange?: string | null;
 }
 
 const TD_BASE = "https://api.twelvedata.com";
@@ -54,12 +63,12 @@ export const searchSymbols = createServerFn({ method: "GET" })
               return t.includes("stock") || t.includes("equity") || t === "common stock";
             });
       const pool = filtered.length > 0 ? filtered : items;
-      return pool.slice(0, 10).map((i) => ({
+      return pool.slice(0, 12).map((i) => ({
         symbol: String(i.symbol ?? ""),
         name: String(i.instrument_name ?? i.symbol ?? ""),
         exchange: String(i.exchange ?? ""),
         type: String(i.instrument_type ?? ""),
-        currency: i.currency ? String(i.currency) : undefined,
+        currency: String(i.currency ?? ""),
       }));
     } catch (e) {
       console.error("searchSymbols failed", e);
@@ -68,51 +77,78 @@ export const searchSymbols = createServerFn({ method: "GET" })
   });
 
 // ---------- Quotes ----------
-async function fetchPrices(symbols: string[]): Promise<Record<string, Quote>> {
-  const out: Record<string, Quote> = {};
-  if (symbols.length === 0) return out;
+async function fetchOne(req: QuoteRequest): Promise<Quote> {
+  const params = new URLSearchParams({ symbol: req.symbol, apikey: apiKey() });
+  if (req.exchange) params.set("exchange", req.exchange);
+  const url = `${TD_BASE}/quote?${params.toString()}`;
+
+  let status: number | null = null;
+  let raw: unknown = null;
   try {
-    const url = `${TD_BASE}/price?symbol=${encodeURIComponent(symbols.join(","))}&apikey=${apiKey()}`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Twelve Data ${res.status}`);
-    const json = (await res.json()) as Record<string, unknown> | { price: string };
-
-    // Single symbol response: { price: "123.45" } | error shape
-    if (symbols.length === 1) {
-      const sym = symbols[0];
-      const j = json as Record<string, unknown>;
-      const priceStr = j.price as string | undefined;
-      out[sym] = {
-        symbol: sym,
-        price: priceStr ? Number(priceStr) : null,
+    status = res.status;
+    const text = await res.text();
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      raw = text;
+    }
+    if (!res.ok) {
+      return {
+        symbol: req.symbol,
+        exchange: req.exchange ?? null,
+        price: null,
         currency: null,
-        error: priceStr ? null : String(j.message ?? "No price"),
+        error: `HTTP ${res.status}`,
+        status,
+        raw,
       };
-      return out;
     }
-
-    // Multi-symbol response: { "SYM": { price: "..." } } or { "SYM": { code: 404, message: "..." } }
-    const obj = json as Record<string, { price?: string; code?: number; message?: string }>;
-    for (const sym of symbols) {
-      const entry = obj[sym];
-      if (entry && entry.price) {
-        out[sym] = { symbol: sym, price: Number(entry.price), currency: null, error: null };
-      } else {
-        out[sym] = {
-          symbol: sym,
-          price: null,
-          currency: null,
-          error: entry?.message ?? "No price",
-        };
-      }
+    const j = raw as Record<string, unknown>;
+    // Twelve Data error shape: { code, message, status: "error" }
+    if (j && (j.status === "error" || j.code)) {
+      return {
+        symbol: req.symbol,
+        exchange: req.exchange ?? null,
+        price: null,
+        currency: null,
+        error: String(j.message ?? "API error"),
+        status,
+        raw,
+      };
     }
-    return out;
+    const priceStr = (j.close ?? j.price) as string | number | undefined;
+    const price = priceStr != null ? Number(priceStr) : NaN;
+    if (!Number.isFinite(price)) {
+      return {
+        symbol: req.symbol,
+        exchange: req.exchange ?? null,
+        price: null,
+        currency: (j.currency as string) ?? null,
+        error: "No price in response",
+        status,
+        raw,
+      };
+    }
+    return {
+      symbol: req.symbol,
+      exchange: req.exchange ?? null,
+      price,
+      currency: (j.currency as string) ?? null,
+      error: null,
+      status,
+      raw,
+    };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Quote fetch failed";
-    for (const sym of symbols) {
-      out[sym] = { symbol: sym, price: null, currency: null, error: msg };
-    }
-    return out;
+    return {
+      symbol: req.symbol,
+      exchange: req.exchange ?? null,
+      price: null,
+      currency: null,
+      error: e instanceof Error ? e.message : "Network error",
+      status,
+      raw,
+    };
   }
 }
 
@@ -120,11 +156,27 @@ export const getQuotes = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
     z
       .object({
-        symbols: z.array(z.string().min(1)).min(1).max(50),
+        requests: z
+          .array(
+            z.object({
+              symbol: z.string().min(1),
+              exchange: z.string().nullable().optional(),
+            }),
+          )
+          .min(1)
+          .max(50),
       })
       .parse(d),
   )
   .handler(async ({ data }): Promise<Record<string, Quote>> => {
-    const unique = Array.from(new Set(data.symbols));
-    return fetchPrices(unique);
+    // De-duplicate by `${symbol}|${exchange ?? ""}`
+    const seen = new Map<string, QuoteRequest>();
+    for (const r of data.requests) {
+      const key = `${r.symbol}|${r.exchange ?? ""}`;
+      if (!seen.has(key)) seen.set(key, { symbol: r.symbol, exchange: r.exchange ?? null });
+    }
+    const entries = await Promise.all(
+      Array.from(seen.entries()).map(async ([key, req]) => [key, await fetchOne(req)] as const),
+    );
+    return Object.fromEntries(entries);
   });
