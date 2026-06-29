@@ -106,7 +106,7 @@ async function fetchOne(req: QuoteRequest): Promise<Quote> {
         raw,
       };
     }
-    const j = raw as Record<string, unknown>;
+    const j = parsed ?? {};
     // Twelve Data error shape: { code, message, status: "error" }
     if (j && (j.status === "error" || j.code)) {
       return {
