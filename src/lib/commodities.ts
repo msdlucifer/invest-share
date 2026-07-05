@@ -75,6 +75,8 @@ export function findCommodityPreset(symbol: string | null | undefined): Commodit
   const legacyMap: Record<string, string> = {
     "XAU/INR": "GC=F",
     "XAG/INR": "SI=F",
+    "XAU/USD": "GC=F",
+    "XAG/USD": "SI=F",
     "WTI/USD": "CL=F",
     "NG/USD": "NG=F",
     "COPPER/USD": "HG=F",
