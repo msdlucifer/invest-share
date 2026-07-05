@@ -119,7 +119,24 @@ export const searchSymbols = createServerFn({ method: "GET" })
 // Provider-per-asset-type dispatch: everything currently routes through Yahoo,
 // which supports Indian equities (.NS/.BO), US equities, FX (INR=X), and
 // commodity futures (GC=F, SI=F, CL=F, NG=F, HG=F).
-async function fetchYahooQuote(req: QuoteRequest): Promise<Quote> {
+//
+// IMPORTANT CAVEAT: query1.finance.yahoo.com is an unofficial, undocumented
+// endpoint — not a supported public API. It's known to intermittently
+// reject otherwise-valid requests (401/429/5xx, or occasionally malformed
+// bodies) from server/datacenter IPs, even for symbols that work fine a
+// moment later. That's the most likely explanation for a symbol working on
+// one refresh and erroring on the next. The retry below absorbs the common
+// case, but there's no guarantee from Yahoo the way there is with a paid,
+// documented provider.
+const TRANSIENT_HTTP_STATUSES = new Set([401, 403, 429, 500, 502, 503, 504]);
+const MAX_TRANSIENT_RETRIES = 2;
+const RETRY_BACKOFF_MS = 800;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchYahooQuoteOnce(req: QuoteRequest): Promise<Quote> {
   const normalized = looksIndian(req.symbol, req.exchange)
     ? normalizeIndianSymbol(req.symbol, req.exchange)
     : req.symbol.trim();
@@ -223,6 +240,23 @@ async function fetchYahooQuote(req: QuoteRequest): Promise<Quote> {
       raw,
     };
   }
+}
+
+async function fetchYahooQuote(req: QuoteRequest): Promise<Quote> {
+  let last: Quote | null = null;
+  for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+    const result = await fetchYahooQuoteOnce(req);
+    if (result.error == null) return result;
+
+    const isTransient =
+      (result.status != null && TRANSIENT_HTTP_STATUSES.has(result.status)) ||
+      result.error === "Invalid JSON from provider" ||
+      result.error === "Network error";
+    last = result;
+    if (!isTransient || attempt === MAX_TRANSIENT_RETRIES) break;
+    await sleep(RETRY_BACKOFF_MS * (attempt + 1));
+  }
+  return last!;
 }
 
 // Public dispatchers — one per asset category. Currently all route to Yahoo,
