@@ -10,6 +10,13 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
+  // Force the Node server preset for real deployments (Railway, etc).
+  // Without this, the shared Lovable config's "cloudflare-module" default
+  // preset leaks into non-sandbox builds, producing a Cloudflare Workers
+  // bundle that a plain Node container (Railway) cannot execute.
+  nitro: {
+    preset: "node-server",
+  },
   vite: {
     preview: {
       allowedHosts: ["invest-share-production.up.railway.app"],
