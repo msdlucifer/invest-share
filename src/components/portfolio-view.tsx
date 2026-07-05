@@ -165,44 +165,56 @@ export function PortfolioView({
     });
   }, [enriched, query, tab]);
 
-  // Allocation totals across ALL assets (not filtered)
+  // Allocation totals across ALL assets (not filtered).
+  // Partial-failure friendly: for a row whose live CMP failed, fall back to
+  // its invested amount so totals stay meaningful. This mirrors what the UI
+  // already shows per-row (Invested is always visible) and keeps the summary
+  // cards populated even if one symbol errors out.
   const allocation = useMemo(() => {
-    const byType: Record<AssetType, { invested: number; current: number; hasAll: boolean; any: boolean }> = {
-      equity: { invested: 0, current: 0, hasAll: true, any: false },
-      bond: { invested: 0, current: 0, hasAll: true, any: false },
-      commodity: { invested: 0, current: 0, hasAll: true, any: false },
+    const byType: Record<AssetType, { invested: number; current: number; any: boolean; allLive: boolean }> = {
+      equity: { invested: 0, current: 0, any: false, allLive: true },
+      bond: { invested: 0, current: 0, any: false, allLive: true },
+      commodity: { invested: 0, current: 0, any: false, allLive: true },
     };
     let totalInvested = 0;
     let totalCurrent = 0;
-    let totalHasAll = enriched.length > 0;
+    let anyRow = false;
+    let allLive = enriched.length > 0;
 
     for (const r of enriched) {
       const t = r.a.asset_type;
       byType[t].any = true;
       byType[t].invested += r.invested;
       totalInvested += r.invested;
+      anyRow = true;
       if (r.current != null) {
         byType[t].current += r.current;
         totalCurrent += r.current;
       } else {
-        byType[t].hasAll = false;
-        totalHasAll = false;
+        // Fallback: use invested amount so partial failure never blanks totals.
+        byType[t].current += r.invested;
+        totalCurrent += r.invested;
+        byType[t].allLive = false;
+        allLive = false;
       }
     }
-    const totalPnl = totalHasAll ? totalCurrent - totalInvested : null;
-    const totalRet = totalHasAll && totalInvested > 0 ? (totalPnl! / totalInvested) * 100 : null;
+
+    const totalCurrentSafe = anyRow ? totalCurrent : null;
+    const totalPnl = anyRow ? totalCurrent - totalInvested : null;
+    const totalRet =
+      anyRow && totalInvested > 0 && allLive ? (totalPnl! / totalInvested) * 100 : null;
     const pctOf = (v: number) => (totalCurrent > 0 ? (v / totalCurrent) * 100 : null);
 
     return {
       totalInvested,
-      totalCurrent: totalHasAll ? totalCurrent : null,
+      totalCurrent: totalCurrentSafe,
       totalPnl,
       totalRet,
-      equity: { ...byType.equity, pct: byType.equity.hasAll && byType.equity.any ? pctOf(byType.equity.current) : null },
-      bond: { ...byType.bond, pct: byType.bond.hasAll && byType.bond.any ? pctOf(byType.bond.current) : null },
+      equity: { ...byType.equity, pct: byType.equity.any ? pctOf(byType.equity.current) : null },
+      bond: { ...byType.bond, pct: byType.bond.any ? pctOf(byType.bond.current) : null },
       commodity: {
         ...byType.commodity,
-        pct: byType.commodity.hasAll && byType.commodity.any ? pctOf(byType.commodity.current) : null,
+        pct: byType.commodity.any ? pctOf(byType.commodity.current) : null,
       },
     };
   }, [enriched]);

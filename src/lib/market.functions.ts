@@ -27,15 +27,42 @@ export interface QuoteRequest {
   exchange?: string | null;
 }
 
-const TD_BASE = "https://api.twelvedata.com";
+// Yahoo Finance — free, no API key required.
+const YF_QUOTE = "https://query1.finance.yahoo.com/v8/finance/chart";
+const YF_SEARCH = "https://query1.finance.yahoo.com/v1/finance/search";
 
-function apiKey(): string {
-  const k = process.env.TWELVE_DATA_API_KEY;
-  if (!k) throw new Error("TWELVE_DATA_API_KEY not configured");
-  return k;
+// A browser-ish UA — Yahoo's public endpoints reject empty/curl UAs with 401.
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
+
+// -----------------------------------------------------------------------------
+// Symbol normalization
+// -----------------------------------------------------------------------------
+// Map user- or legacy-stored symbols to the format Yahoo accepts.
+//   RELIANCE          -> RELIANCE.NS   (default Indian equities to NSE)
+//   RELIANCE.BL       -> RELIANCE.BO   (`.BL` is not a Yahoo suffix; BSE is `.BO`)
+//   RELIANCE.NS/.BO   -> unchanged
+//   AAPL              -> unchanged     (US)
+export function normalizeIndianSymbol(symbol: string, exchange?: string | null): string {
+  const s = symbol.trim().toUpperCase();
+  if (!s) return s;
+  if (s.endsWith(".BL")) return s.slice(0, -3) + ".BO";
+  if (s.endsWith(".NS") || s.endsWith(".BO")) return s;
+  const ex = (exchange ?? "").toUpperCase();
+  if (ex === "NSE") return `${s}.NS`;
+  if (ex === "BSE") return `${s}.BO`;
+  return s;
 }
 
-// ---------- Symbol search ----------
+function looksIndian(symbol: string, exchange?: string | null): boolean {
+  const s = symbol.toUpperCase();
+  const ex = (exchange ?? "").toUpperCase();
+  return s.endsWith(".NS") || s.endsWith(".BO") || s.endsWith(".BL") || ex === "NSE" || ex === "BSE";
+}
+
+// -----------------------------------------------------------------------------
+// Symbol search (Yahoo)
+// -----------------------------------------------------------------------------
 export const searchSymbols = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) =>
     z
@@ -47,54 +74,68 @@ export const searchSymbols = createServerFn({ method: "GET" })
   )
   .handler(async ({ data }): Promise<SymbolSearchResult[]> => {
     try {
-      const url = `${TD_BASE}/symbol_search?symbol=${encodeURIComponent(data.q)}&apikey=${apiKey()}`;
-      const res = await fetch(url);
+      const url = `${YF_SEARCH}?q=${encodeURIComponent(data.q)}&quotesCount=15&newsCount=0`;
+      const res = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
       if (!res.ok) return [];
-      const json = (await res.json()) as { data?: Array<Record<string, unknown>> };
-      const items = json.data ?? [];
-      const filtered =
-        data.assetType === "commodity"
-          ? items.filter((i) => {
-              const t = String(i.instrument_type ?? "").toLowerCase();
-              return t.includes("commodity") || t.includes("etf") || t.includes("forex");
-            })
-          : items.filter((i) => {
-              const t = String(i.instrument_type ?? "").toLowerCase();
-              return t.includes("stock") || t.includes("equity") || t === "common stock";
-            });
+      const json = (await res.json()) as {
+        quotes?: Array<{
+          symbol?: string;
+          shortname?: string;
+          longname?: string;
+          exchange?: string;
+          exchDisp?: string;
+          quoteType?: string;
+          typeDisp?: string;
+        }>;
+      };
+      const items = json.quotes ?? [];
+      const wantEquity = data.assetType === "equity";
+      const filtered = items.filter((i) => {
+        const t = String(i.quoteType ?? "").toUpperCase();
+        return wantEquity ? t === "EQUITY" : t === "FUTURE" || t === "COMMODITY" || t === "ETF";
+      });
       const pool = filtered.length > 0 ? filtered : items;
-      return pool.slice(0, 12).map((i) => ({
-        symbol: String(i.symbol ?? ""),
-        name: String(i.instrument_name ?? i.symbol ?? ""),
-        exchange: String(i.exchange ?? ""),
-        type: String(i.instrument_type ?? ""),
-        currency: String(i.currency ?? ""),
-      }));
+      return pool.slice(0, 12).map((i) => {
+        const sym = String(i.symbol ?? "");
+        // Currency isn't in the search payload; infer from suffix.
+        const currency = sym.endsWith(".NS") || sym.endsWith(".BO") ? "INR" : "";
+        return {
+          symbol: sym,
+          name: String(i.longname ?? i.shortname ?? sym),
+          exchange: String(i.exchDisp ?? i.exchange ?? ""),
+          type: String(i.typeDisp ?? i.quoteType ?? ""),
+          currency,
+        };
+      });
     } catch (e) {
       console.error("searchSymbols failed", e);
       return [];
     }
   });
 
-// ---------- Quotes ----------
-async function fetchOne(req: QuoteRequest): Promise<Quote> {
-  const params = new URLSearchParams({ symbol: req.symbol, apikey: apiKey() });
-  if (req.exchange) params.set("exchange", req.exchange);
-  const url = `${TD_BASE}/quote?${params.toString()}`;
+// -----------------------------------------------------------------------------
+// Quotes (Yahoo chart endpoint)
+// -----------------------------------------------------------------------------
+// Provider-per-asset-type dispatch: everything currently routes through Yahoo,
+// which supports Indian equities (.NS/.BO), US equities, FX (INR=X), and
+// commodity futures (GC=F, SI=F, CL=F, NG=F, HG=F).
+async function fetchYahooQuote(req: QuoteRequest): Promise<Quote> {
+  const normalized = looksIndian(req.symbol, req.exchange)
+    ? normalizeIndianSymbol(req.symbol, req.exchange)
+    : req.symbol.trim();
+
+  const url = `${YF_QUOTE}/${encodeURIComponent(normalized)}?interval=1d&range=1d`;
 
   let status: number | null = null;
   let raw: string | null = null;
-  let parsed: Record<string, unknown> | null = null;
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "application/json" },
+    });
     status = res.status;
     const text = await res.text();
     raw = text.length > 2000 ? text.slice(0, 2000) + "…" : text;
-    try {
-      parsed = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      parsed = null;
-    }
+
     if (!res.ok) {
       return {
         symbol: req.symbol,
@@ -106,37 +147,67 @@ async function fetchOne(req: QuoteRequest): Promise<Quote> {
         raw,
       };
     }
-    const j = parsed ?? {};
-    // Twelve Data error shape: { code, message, status: "error" }
-    if (j && (j.status === "error" || j.code)) {
+
+    let parsed: {
+      chart?: {
+        result?: Array<{
+          meta?: {
+            regularMarketPrice?: number;
+            chartPreviousClose?: number;
+            previousClose?: number;
+            currency?: string;
+          };
+        }> | null;
+        error?: { code?: string; description?: string } | null;
+      };
+    } | null = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
       return {
         symbol: req.symbol,
         exchange: req.exchange ?? null,
         price: null,
         currency: null,
-        error: String(j.message ?? "API error"),
+        error: "Invalid JSON from provider",
         status,
         raw,
       };
     }
-    const priceStr = (j.close ?? j.price) as string | number | undefined;
-    const price = priceStr != null ? Number(priceStr) : NaN;
+
+    if (parsed?.chart?.error) {
+      return {
+        symbol: req.symbol,
+        exchange: req.exchange ?? null,
+        price: null,
+        currency: null,
+        error: parsed.chart.error.description ?? String(parsed.chart.error.code ?? "Provider error"),
+        status,
+        raw,
+      };
+    }
+
+    const meta = parsed?.chart?.result?.[0]?.meta;
+    const priceRaw =
+      meta?.regularMarketPrice ?? meta?.chartPreviousClose ?? meta?.previousClose;
+    const price = priceRaw != null ? Number(priceRaw) : NaN;
     if (!Number.isFinite(price)) {
       return {
         symbol: req.symbol,
         exchange: req.exchange ?? null,
         price: null,
-        currency: (j.currency as string) ?? null,
+        currency: meta?.currency ?? null,
         error: "No price in response",
         status,
         raw,
       };
     }
+
     return {
       symbol: req.symbol,
       exchange: req.exchange ?? null,
       price,
-      currency: (j.currency as string) ?? null,
+      currency: meta?.currency ?? null,
       error: null,
       status,
       raw,
@@ -153,6 +224,13 @@ async function fetchOne(req: QuoteRequest): Promise<Quote> {
     };
   }
 }
+
+// Public dispatchers — one per asset category. Currently all route to Yahoo,
+// but the seam is here for future providers (e.g. a paid US data feed).
+export const getEquityPrice = (req: QuoteRequest) => fetchYahooQuote(req);
+export const getUSStockPrice = (req: QuoteRequest) => fetchYahooQuote(req);
+export const getCommodityPrice = (req: QuoteRequest) => fetchYahooQuote(req);
+export const getFxPrice = (req: QuoteRequest) => fetchYahooQuote(req);
 
 export const getQuotes = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
@@ -171,14 +249,38 @@ export const getQuotes = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }): Promise<Record<string, Quote>> => {
-    // De-duplicate by `${symbol}|${exchange ?? ""}`
+    // De-duplicate by `${symbol}|${exchange ?? ""}` — same key the UI uses.
     const seen = new Map<string, QuoteRequest>();
     for (const r of data.requests) {
       const key = `${r.symbol}|${r.exchange ?? ""}`;
       if (!seen.has(key)) seen.set(key, { symbol: r.symbol, exchange: r.exchange ?? null });
     }
-    const entries = await Promise.all(
-      Array.from(seen.entries()).map(async ([key, req]) => [key, await fetchOne(req)] as const),
+
+    // Isolate every request: one failing symbol must never abort the batch.
+    const settled = await Promise.allSettled(
+      Array.from(seen.entries()).map(async ([key, req]) => {
+        const q = await fetchYahooQuote(req);
+        return [key, q] as const;
+      }),
     );
-    return Object.fromEntries(entries);
+
+    const out: Record<string, Quote> = {};
+    let i = 0;
+    for (const [key, req] of seen.entries()) {
+      const s = settled[i++];
+      if (s.status === "fulfilled") {
+        out[key] = s.value[1];
+      } else {
+        out[key] = {
+          symbol: req.symbol,
+          exchange: req.exchange ?? null,
+          price: null,
+          currency: null,
+          error: s.reason instanceof Error ? s.reason.message : "Unknown error",
+          status: null,
+          raw: null,
+        };
+      }
+    }
+    return out;
   });
