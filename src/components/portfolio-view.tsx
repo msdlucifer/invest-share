@@ -75,12 +75,13 @@ export function PortfolioView({
           reqs.push({ symbol: a.symbol, exchange: a.exchange ?? null });
         }
       } else if (a.asset_type === "commodity" && a.symbol) {
-        const k = qkey(a.symbol, null);
+        const preset = findCommodityPreset(a.symbol);
+        const apiSymbol = preset?.apiSymbol ?? a.symbol;
+        const k = qkey(apiSymbol, null);
         if (!seen.has(k)) {
           seen.add(k);
-          reqs.push({ symbol: a.symbol, exchange: null });
+          reqs.push({ symbol: apiSymbol, exchange: null });
         }
-        const preset = findCommodityPreset(a.symbol);
         if (preset && preset.apiCurrency !== preset.displayCurrency) needsFx = true;
       }
     }
@@ -129,8 +130,9 @@ export function PortfolioView({
         quote = quotesQ.data?.[qkey(a.symbol, a.exchange)] ?? null;
         cmp = quote?.price ?? a.current_price ?? null;
       } else if (a.asset_type === "commodity" && a.symbol) {
-        quote = quotesQ.data?.[qkey(a.symbol, null)] ?? null;
         const preset = findCommodityPreset(a.symbol);
+        const apiSymbol = preset?.apiSymbol ?? a.symbol;
+        quote = quotesQ.data?.[qkey(apiSymbol, null)] ?? null;
         cmpUnit = a.unit ?? preset?.displayUnit ?? null;
         if (quote?.price != null && preset) {
           let price = quote.price * preset.unitFactor;
