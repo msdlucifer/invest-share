@@ -1,7 +1,11 @@
-// Commodity presets — the user picks one of these; we store the API symbol
-// and convert the API response into the user's display unit/currency.
-// Twelve Data XAU/INR & XAG/INR return INR per TROY OUNCE.
-// 1 troy oz = 31.1034768 g.
+// Commodity presets — user picks one; we store the API symbol used by the
+// pricing provider (Yahoo Finance) and convert the API response into the
+// user's display unit/currency (INR / gram, INR / barrel, etc.).
+//
+// Yahoo futures symbols quote metals in USD per troy ounce, so metals need
+// two conversions:
+//   1) unit:   troy ounce -> gram   (1/31.1034768)
+//   2) fx:     USD        -> INR    (via INR=X spot)
 
 export type CommodityPreset = {
   name: string;
@@ -10,9 +14,8 @@ export type CommodityPreset = {
   apiUnit: "oz" | "barrel" | "MMBtu" | "lb";
   displayUnit: string;
   displayCurrency: "INR";
-  // Multiply API price (in apiCurrency / apiUnit) by this factor to get
-  // price in (displayCurrency / displayUnit), assuming any FX is applied
-  // separately when apiCurrency !== displayCurrency.
+  // Multiply API price by this factor to convert apiUnit -> displayUnit.
+  // FX (apiCurrency -> displayCurrency) is applied separately.
   unitFactor: number;
 };
 
@@ -21,8 +24,8 @@ const OZ_TO_GRAM = 1 / 31.1034768;
 export const COMMODITY_PRESETS: CommodityPreset[] = [
   {
     name: "Gold",
-    apiSymbol: "XAU/INR",
-    apiCurrency: "INR",
+    apiSymbol: "GC=F", // Yahoo: Gold Futures, USD/oz
+    apiCurrency: "USD",
     apiUnit: "oz",
     displayUnit: "gram",
     displayCurrency: "INR",
@@ -30,8 +33,8 @@ export const COMMODITY_PRESETS: CommodityPreset[] = [
   },
   {
     name: "Silver",
-    apiSymbol: "XAG/INR",
-    apiCurrency: "INR",
+    apiSymbol: "SI=F", // Yahoo: Silver Futures, USD/oz
+    apiCurrency: "USD",
     apiUnit: "oz",
     displayUnit: "gram",
     displayCurrency: "INR",
@@ -39,7 +42,7 @@ export const COMMODITY_PRESETS: CommodityPreset[] = [
   },
   {
     name: "Crude Oil (WTI)",
-    apiSymbol: "WTI/USD",
+    apiSymbol: "CL=F", // Yahoo: WTI Crude Futures, USD/barrel
     apiCurrency: "USD",
     apiUnit: "barrel",
     displayUnit: "barrel",
@@ -48,7 +51,7 @@ export const COMMODITY_PRESETS: CommodityPreset[] = [
   },
   {
     name: "Natural Gas",
-    apiSymbol: "NG/USD",
+    apiSymbol: "NG=F",
     apiCurrency: "USD",
     apiUnit: "MMBtu",
     displayUnit: "MMBtu",
@@ -57,7 +60,7 @@ export const COMMODITY_PRESETS: CommodityPreset[] = [
   },
   {
     name: "Copper",
-    apiSymbol: "COPPER/USD",
+    apiSymbol: "HG=F", // Yahoo: Copper Futures, USD/lb
     apiCurrency: "USD",
     apiUnit: "lb",
     displayUnit: "lb",
@@ -68,7 +71,17 @@ export const COMMODITY_PRESETS: CommodityPreset[] = [
 
 export function findCommodityPreset(symbol: string | null | undefined): CommodityPreset | null {
   if (!symbol) return null;
-  return COMMODITY_PRESETS.find((p) => p.apiSymbol === symbol) ?? null;
+  // Accept legacy Twelve-Data symbols by mapping to the new Yahoo symbol.
+  const legacyMap: Record<string, string> = {
+    "XAU/INR": "GC=F",
+    "XAG/INR": "SI=F",
+    "WTI/USD": "CL=F",
+    "NG/USD": "NG=F",
+    "COPPER/USD": "HG=F",
+  };
+  const resolved = legacyMap[symbol] ?? symbol;
+  return COMMODITY_PRESETS.find((p) => p.apiSymbol === resolved) ?? null;
 }
 
-export const FX_USD_INR_SYMBOL = "USD/INR";
+// Yahoo Finance FX symbol for USD -> INR spot rate.
+export const FX_USD_INR_SYMBOL = "INR=X";
